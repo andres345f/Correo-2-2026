@@ -17,6 +17,8 @@ import java.net.ConnectException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.mail.MailException;
@@ -37,6 +39,9 @@ public class CorreoService {
 	private static final int TIEMPO_MAXIMO_MS = 30000;
 	// Encabezados en UTF-8 crudo (SMTPUTF8) se leen como UTF-8; si no lo son, quedan U+FFFD y el asunto se rechaza.
 	private static final Session LECTURA = Session.getInstance(propiedadesLectura());
+	/** logs/access.log y logs/error.log (ver logback-spring.xml). */
+	private static final Logger ACCESO = LoggerFactory.getLogger("access");
+	private static final Logger ERRORES = LoggerFactory.getLogger("error");
 
 	private static java.util.Properties propiedadesLectura() {
 		java.util.Properties propiedades = new java.util.Properties();
@@ -92,10 +97,12 @@ public class CorreoService {
 					atender(encabezados);
 				} catch (Exception e) {
 					Terminal.servidor("Error al procesar el correo: " + e.getMessage() + " [" + CodigoError.CORREO_ILEGIBLE.etiqueta() + "]");
+					ERRORES.error("Correo ilegible [" + CodigoError.CORREO_ILEGIBLE.etiqueta() + "]", e);
 				}
 			}
 		} catch (IOException e) {
 			Terminal.servidor(describirFalloPop(e) + " [" + CodigoError.BUZON_NO_DISPONIBLE.etiqueta() + "]");
+			ERRORES.error(describirFalloPop(e) + " [" + CodigoError.BUZON_NO_DISPONIBLE.etiqueta() + "]", e);
 		}
 	}
 
@@ -118,7 +125,7 @@ public class CorreoService {
 			return "";
 		}
 		String limpio = asunto.replaceAll("\\p{Cc}", "");
-		return limpio.toUpperCase().contains("USU[") ? limpio.split("\\[", 2)[0] + "[***]" : limpio;
+		return limpio.matches("(?is).*USU\\s*\\[.*") ? limpio.split("\\[", 2)[0].strip() + "[***]" : limpio;
 	}
 
 	/** El encabezado sin decodificar; en USU se oculta, porque Base64 se revierte y trae la contrasena. */
@@ -152,11 +159,12 @@ public class CorreoService {
 		String origen = direccion(mensaje.getFrom());
 		if (origen == null || esAutomatico(origen)) {
 			Terminal.servidor("Correo ignorado de: " + origen);
+			ACCESO.info("de=" + origen + " | ignorado (correo automatico o de la propia cuenta)");
 			return;
 		}
 		String asunto = mensaje.getSubject();
 		// Solo el codigo del comando: los parametros pueden traer una contrasena.
-		String comando = asunto == null ? "" : asunto.split("\\[", 2)[0].replaceAll("\\p{Cc}", "");
+		String comando = asunto == null ? "" : asunto.split("\\[", 2)[0].replaceAll("\\p{Cc}", "").strip();
 		Terminal.servidor("Subject crudo (como llego del servidor): " + crudoVisible(mensaje.getHeader("Subject", null), asunto));
 		Terminal.servidor("Parseando subject decodificado: " + visible(asunto) + " de: " + origen);
 		Terminal.servidor("Caracteres no ASCII: " + noAscii(visible(asunto)));
@@ -165,17 +173,27 @@ public class CorreoService {
 		ComandoService.Respuesta respuesta = comandos.procesar(asunto, origen);
 		String detalle = ComandoService.ASUNTO_AYUDA.equals(respuesta.asunto()) ? "Guia enviada." : respuesta.cuerpo();
 		Terminal.servidor((respuesta.esError() ? "Error en el comando " + comando + ": " : "Resultado: ") + respuesta.asunto() + "\n" + detalle);
+		if (respuesta.esError()) {
+			// En USU el detalle puede repetir la contrasena: solo queda la linea del codigo.
+			String registro = visible(asunto).endsWith("[***]") ? respuesta.cuerpo().split("\n", 2)[0] : respuesta.cuerpo();
+			ERRORES.error("de=" + origen + " | asunto=" + visible(asunto) + " | " + respuesta.asunto() + " | " + registro.replace("\n", " / "));
+		}
 
 		MimeMessage correo = construirRespuesta(origen, respuesta);
+		String envio;
 		try {
 			mailSender.send(correo);
 			Terminal.servidor("Correo enviado a " + origen);
+			envio = "enviada";
 		} catch (MailException e) {
 			String causa = causaDeEnvio(e);
 			// Si el servidor SMTP respondio, su codigo ya es el estandar; si no, no hubo conexion.
 			String codigo = causa.matches("(?s)\\d{3} .*") ? "" : CodigoError.RESPUESTA_NO_ENVIADA.codigo() + " ";
 			Terminal.servidor("No se pudo enviar el correo a " + origen + ", error: " + codigo + causa + " [RESPUESTA_NO_ENVIADA]");
+			ERRORES.error("No se pudo enviar la respuesta a " + origen + ": " + codigo + causa + " [RESPUESTA_NO_ENVIADA]", e);
+			envio = "no enviada";
 		}
+		ACCESO.info("de=" + origen + " | comando=" + (comando.isEmpty() ? "(vacio)" : comando) + " | resultado=" + respuesta.asunto() + " | respuesta " + envio);
 	}
 
 	/** multipart/alternative: primero el texto y al final el HTML, que es el preferido. */

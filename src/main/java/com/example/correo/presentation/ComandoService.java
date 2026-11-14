@@ -12,9 +12,11 @@ import com.example.correo.service.PermisosService;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.MatchResult;
+import java.util.ArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -54,10 +56,11 @@ public class ComandoService {
 	}
 
 	public static final Map<String, Class<?>> TABLAS = CatalogoTablas.TABLAS;
+	/** Escribe en logs/error.log (ver logback-spring.xml). */
+	private static final Logger ERRORES = LoggerFactory.getLogger("error");
 
-	private static final Pattern COMANDO = Pattern.compile("^([A-Z]{3})([A-Z]{3})\\[(.*)]$");
-	private static final Pattern LISTA = Pattern.compile("^\"[^\"]*\"(\\s*,\\s*\"[^\"]*\")*$");
-	private static final Pattern PARAMETRO = Pattern.compile("\"([^\"]*)\"");
+	// Acepta minusculas y espacios entre el comando y el corchete: "insper [ ... ]".
+	private static final Pattern COMANDO = Pattern.compile("^([A-Z]{3})([A-Z]{3})\\s*\\[(.*)]$", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 	// Rastros de un asunto danado: caracteres de control, bytes que no corresponden al
 	// charset (U+FFFD) o una encoded-word (RFC 2047) que quedo sin decodificar.
 	private static final Pattern ASUNTO_ILEGIBLE = Pattern
@@ -77,7 +80,8 @@ public class ComandoService {
 	}
 
 	public Respuesta procesar(String asunto, String remitente) {
-		String texto = asunto == null ? "" : asunto.trim();
+		// El espacio duro (U+00A0) que agregan algunos clientes de correo cuenta como espacio normal.
+		String texto = asunto == null ? "" : asunto.replace(' ', ' ').strip();
 		try {
 			return ejecutar(texto, remitente);
 		} catch (ComandoInvalidoException e) {
@@ -107,6 +111,7 @@ public class ComandoService {
 			mensaje = "Ocurrio un error inesperado al ejecutar la orden.";
 		}
 		Terminal.servidor("Error de ejecución [" + codigo.etiqueta() + "] SQLSTATE " + estadoSql(e) + " | " + NestedExceptionUtils.getMostSpecificCause(e).getMessage());
+		ERRORES.error("Excepcion al ejecutar [" + codigo.etiqueta() + "] SQLSTATE " + estadoSql(e), e);
 		return error(codigo, mensaje);
 	}
 
@@ -129,6 +134,59 @@ public class ComandoService {
 		return new Respuesta(asunto, cuerpo, HtmlCorreo.pagina(asunto, parrafo));
 	}
 
+	/**
+	 * Separa "a" , "b \"c\"" en sus valores. Dentro de un dato, \" es una comilla y \\ una barra.
+	 * Los espacios alrededor de las comas y de cada valor se ignoran.
+	 */
+	static List<String> parametros(String lista) {
+		String texto = lista.strip();
+		List<String> valores = new ArrayList<>();
+		int i = 0;
+		while (true) {
+			if (i >= texto.length() || texto.charAt(i) != '"') {
+				throw parametrosMalEscritos();
+			}
+			StringBuilder valor = new StringBuilder();
+			boolean cerrado = false;
+			for (i++; i < texto.length(); i++) {
+				char c = texto.charAt(i);
+				if (c == '\\' && i + 1 < texto.length() && (texto.charAt(i + 1) == '"' || texto.charAt(i + 1) == '\\')) {
+					valor.append(texto.charAt(++i));
+				} else if (c == '"') {
+					cerrado = true;
+					i++;
+					break;
+				} else {
+					valor.append(c);
+				}
+			}
+			if (!cerrado) {
+				throw parametrosMalEscritos();
+			}
+			valores.add(valor.toString().strip());
+			i = saltarEspacios(texto, i);
+			if (i == texto.length()) {
+				return valores;
+			}
+			if (texto.charAt(i) != ',') {
+				throw parametrosMalEscritos();
+			}
+			i = saltarEspacios(texto, i + 1);
+		}
+	}
+
+	private static int saltarEspacios(String texto, int i) {
+		while (i < texto.length() && Character.isWhitespace(texto.charAt(i))) {
+			i++;
+		}
+		return i;
+	}
+
+	private static ComandoInvalidoException parametrosMalEscritos() {
+		return new ComandoInvalidoException(CodigoError.PARAMETROS_MAL_ESCRITOS,
+				"Los parametros deben ir entre comillas dobles y separados por comas. Para escribir una comilla dentro de un dato use \\\".");
+	}
+
 	private Respuesta listado(Class<?> tabla, Listado listado) {
 		return Respuesta.tabla("Listando " + tabla.getSimpleName(), listado);
 	}
@@ -147,27 +205,21 @@ public class ComandoService {
 			throw new ComandoInvalidoException(CodigoError.FORMATO_INVALIDO,
 					"El asunto no es un comando. Use ACCIONTABLA[\"parametro\",\"parametro\"], por ejemplo LISPER[\"*\"].");
 		}
-		String verbo = comando.group(1);
-		Class<?> tabla = TABLAS.get(comando.group(2));
+		String verbo = comando.group(1).toUpperCase();
+		String codigoTabla = comando.group(2).toUpperCase();
+		Class<?> tabla = TABLAS.get(codigoTabla);
 		if (tabla == null) {
 			throw new ComandoInvalidoException(CodigoError.COMANDO_INEXISTENTE,
-					"El comando " + verbo + comando.group(2) + " no existe: la tabla " + comando.group(2) + " no es valida.");
+					"El comando " + verbo + codigoTabla + " no existe: la tabla " + codigoTabla + " no es valida.");
 		}
 		Actor actor = permisos.actor(remitente);
-		OperacionesService.Operacion operacion = operaciones.buscar(verbo + comando.group(2));
+		OperacionesService.Operacion operacion = operaciones.buscar(verbo + codigoTabla);
 		if (operacion != null) {
 			permisos.exigirRol(actor, operacion.codigo(), operacion.roles());
 		} else {
-			permisos.autorizar(actor, verbo, comando.group(2));
+			permisos.autorizar(actor, verbo, codigoTabla);
 		}
-		if (!LISTA.matcher(comando.group(3).trim()).matches()) {
-			throw new ComandoInvalidoException(CodigoError.PARAMETROS_MAL_ESCRITOS,
-					"Los parametros deben ir entre comillas dobles y separados por comas.");
-		}
-		List<String> parametros = PARAMETRO.matcher(comando.group(3)).results()
-				.map(MatchResult::group)
-				.map(p -> p.substring(1, p.length() - 1).trim())
-				.toList();
+		List<String> parametros = parametros(comando.group(3));
 
 		if (operacion != null) {
 			return new PresentadorRespuesta().presentar(operaciones.ejecutar(operacion, actor, parametros));

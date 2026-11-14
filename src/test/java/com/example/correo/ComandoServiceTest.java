@@ -54,6 +54,31 @@ class ComandoServiceTest extends BaseTemporalTest {
 	}
 
 	@Test
+	void aceptaEspaciosMinusculasYComillasEscapadas() {
+		String id = crear("  inscat  [  \"Jugo \\\"natural\\\" 100%\"  ,   \"Bebidas\"  ]  ");
+		String fila = enviar("LISCAT [ \"" + id + "\" ]").cuerpo();
+		assertTrue(fila.contains("descripcion=Jugo \"natural\" 100%") && fila.contains("nombre=Bebidas"), fila);
+
+		// \\ es una barra; una barra sola que no escapa nada se conserva tal cual.
+		String otro = crear("INSCAT[\"C:\\\\ruta y a\\b\",\"Barras\"]");
+		assertTrue(enviar("LISCAT[\"" + otro + "\"]").cuerpo().contains("descripcion=C:\\ruta y a\\b"));
+
+		// Espacio duro (U+00A0) de algunos clientes de correo y caracteres UTF-8.
+		String utf = crear("INSCAT\u00A0[\"Café, maní y ñandú\",\"Señal\"]");
+		String filaUtf = enviar("LISCAT[\"" + utf + "\"]").cuerpo();
+		assertTrue(filaUtf.contains("descripcion=Café, maní y ñandú") && filaUtf.contains("nombre=Señal"), filaUtf);
+	}
+
+	@Test
+	void rechazaComillasMalCerradas() {
+		assertError(CodigoError.PARAMETROS_MAL_ESCRITOS, "INSCAT[\"sin cerrar,\"Frutas\"]");
+		assertError(CodigoError.PARAMETROS_MAL_ESCRITOS, "INSCAT[\"a\" \"b\"]");
+		assertError(CodigoError.PARAMETROS_MAL_ESCRITOS, "INSCAT[\"a\",]");
+		assertError(CodigoError.PARAMETROS_MAL_ESCRITOS, "INSCAT[\"termina en \\\"]");
+		assertError(CodigoError.PARAMETROS_MAL_ESCRITOS, "INSCAT[\"a\",\"b\"x]");
+	}
+
+	@Test
 	void cicloCompletoConBajaLogica() {
 		String id = crear("INSCAT[\"Fruta fresca\",\"Frutas\"]");
 		assertTrue(enviar("LISCAT[\"" + id + "\"]").cuerpo().contains("nombre=Frutas"));

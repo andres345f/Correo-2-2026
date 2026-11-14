@@ -59,7 +59,7 @@ final class AyudaComandos {
 			<h2>3. Reglas para escribir los datos</h2>
 			<ul>
 			<li>La acción y la tabla van en <b>MAYÚSCULAS</b>.</li>
-			<li>Cada dato va entre <b>comillas dobles rectas</b> (<code>"</code>) y se separa con una coma. Si su teléfono cambia las comillas por otras curvas, corríjalas. Un dato no puede contener comillas.</li>
+			<li>Cada dato va entre <b>comillas dobles rectas</b> (<code>"</code>) y se separa con una coma. Si su teléfono cambia las comillas por otras curvas, corríjalas. Para escribir una comilla dentro de un dato, ponga una barra antes: <code>\\"</code> (por ejemplo <code>"Jugo \\"natural\\""</code>). Se aceptan espacios extra y minúsculas en el comando.</li>
 			<li>Hay que respetar el <b>orden</b> y la <b>cantidad</b> de datos que indica cada tabla.</li>
 			<li>Si no tiene un dato, escríbalo vacío (<code>""</code>), pero no quite su lugar. Al crear queda en blanco; al modificar conserva el valor anterior.</li>
 			<li>El <b>ID</b> es el número que identifica a un registro: el sistema lo asigna y lo informa al crearlo. También aparece al listar con <code>LIS</code>.</li>

@@ -2,7 +2,7 @@
 
 **Para empezar, envíe un correo con el asunto `HELP`.** La respuesta es una guía paso a paso con todas las tablas, sus datos y comandos listos para copiar. Las respuestas llegan en HTML, con texto de respaldo.
 
-El comando va en el **Asunto**: `ACCIONTABLA["parametro","parametro"]`. Cada parámetro va entre comillas dobles y no puede contener comillas.
+El comando va en el **Asunto**: `ACCIONTABLA["parametro","parametro"]`. Cada parámetro va entre comillas dobles. Para poner una comilla dentro de un dato se escribe `\"` (y `\\` para una barra): `INSCAT["Jugo \"natural\"","Bebidas"]`. Se aceptan espacios extra (`INSCAT [ "a" , "b" ]`) y el comando en minúsculas.
 
 | Acción | Parámetros | Ejemplo |
 |---|---|---|
